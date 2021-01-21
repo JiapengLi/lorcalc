@@ -87,6 +87,7 @@ double lrc(opt_t *opt)
     double fec_rate;
     double Nsymbol_header;
     double total_bytes_nb;
+    double total_bits_nb;
     double symbols_nb_preamble;
     double symbols_nb_data;
     double tx_bits_symbol;
@@ -118,6 +119,7 @@ double lrc(opt_t *opt)
     } else {
         fec_rate = 4.0 / (4.0 + coderate);
     }
+    // fec_rate = CR/4 or (CR+4)/4
 
     /* option #3: low data rate*/
     low_datarate_optimize = (datarate >= 11);
@@ -126,44 +128,58 @@ double lrc(opt_t *opt)
     } else {
         opt->ldro = low_datarate_optimize;
     }
-    tx_bits_symbol = datarate - 2 * (low_datarate_optimize ? 1 : 0);
+    tx_bits_symbol = datarate - 2 * (low_datarate_optimize ? 1 : 0);    // (SF - 2*DE)
 
     /* header */
-    Nsymbol_header = (fixLen == false) ? 20 : 0;
+    Nsymbol_header = fixLen ? 0 : 20;
 
-    /* payload and crc */
-    total_bytes_nb = payloadLen + 2 * (crcOn  ? 1 : 0);
+    /* payload and crc: 8 * Npl + Ncrc */
+    total_bits_nb = 8 * (payloadLen + 2 * (crcOn  ? 1 : 0));
 
     tx_infobits_header = (datarate * 4 + (fine_synch ? 1 : 0) * 8 - 8 - Nsymbol_header);
 
-    /* symbol time */
-    symbolPeriod = pow(2, datarate) / (double)bandwidth * 1000000;
-
     if (!long_interleaving) {
-        tx_infobits_payload = MAX(0, 8 * total_bytes_nb - tx_infobits_header);
+        tx_infobits_payload = MAX(0, total_bits_nb - tx_infobits_header);
         symbols_nb_data = 8 + ceil(tx_infobits_payload / 4 / tx_bits_symbol) * (coderate + 4);
     } else {
-        if (fixLen == false) {
-            if (tx_infobits_header < 8 * total_bytes_nb) {
-                tx_infobits_header = MIN(tx_infobits_header, 8 * payloadLen);
-            }
-            tx_infobits_payload = MAX(0, 8 * total_bytes_nb - tx_infobits_header);
-            symbols_nb_data = 8 + ceil(tx_infobits_payload / fec_rate / tx_bits_symbol);
-        } else {
+        if (fixLen) {
+            /* without header */
             double tx_bits_symbol_start = datarate - 2 + 2 * (fine_synch ? 1 : 0);
-            double symbols_nb_start = ceil(8 * total_bytes_nb / fec_rate / tx_bits_symbol_start);
+            double symbols_nb_start = ceil(total_bits_nb / fec_rate / tx_bits_symbol_start);
             if (symbols_nb_start < 8) {
                 symbols_nb_data = symbols_nb_start;
             } else  {
                 double tx_codedbits_header = tx_bits_symbol_start * 8;
-                double tx_codedbits_payload = 8 * total_bytes_nb / fec_rate - tx_codedbits_header;
+                double tx_codedbits_payload = total_bits_nb / fec_rate - tx_codedbits_header;
                 symbols_nb_data = 8 + ceil(tx_codedbits_payload / tx_bits_symbol);
             }
+        } else {
+            /* with header */
+            tx_infobits_header = floor(1.0*((int)datarate - 7)/2) * 8;
+            if (tx_infobits_header < 0) {
+                tx_infobits_header = 0;
+            }
+
+            if (tx_infobits_header < total_bits_nb) {
+                tx_infobits_header = MIN(tx_infobits_header, 8 * payloadLen);
+            }
+            tx_infobits_payload = MAX(0, total_bits_nb - tx_infobits_header);
+
+            symbols_nb_data = 8 + ceil(tx_infobits_payload / fec_rate / tx_bits_symbol);
         }
     }
 
+    /* symbol time */
+    symbolPeriod = pow(2, datarate) / (double)bandwidth * 1000000;
+
     symbols_nb_preamble = preambleLen + 4.25 + 2 * (fine_synch ? 1 : 0);
     LocalTimeOnAir = (symbols_nb_preamble + symbols_nb_data) * symbolPeriod;
+
+    print("symbol: %.6fus, total: %.2f pr: %.2f, hdr/pl/crc: %.2f",
+            symbolPeriod,
+            symbols_nb_preamble + symbols_nb_data,
+            symbols_nb_preamble,
+            symbols_nb_data);
 
     return LocalTimeOnAir;
 }
